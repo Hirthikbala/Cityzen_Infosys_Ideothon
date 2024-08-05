@@ -1,0 +1,141 @@
+#include <WiFi.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <qrcode.h>
+#include <HTTPClient.h>
+ // OLED display configuration
+#define SCREEN_WIDTH 128  // OLED display width, in pixels
+#define SCREEN_HEIGHT 64  // OLED display height, in pixels
+#define OLED_RESET    -1  // Reset pin (or -1 if sharing Arduino reset pin)
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+// Wi-Fi credentials
+const char* ssid = "your_SSID";
+const char* password = "your_PASSWORD";
+ // TNEB Website endpoint
+const char* serverName = "http://your_tneb_endpoint.com/upload";
+ // Pin definitions
+#define VOLTAGE_SENSOR_PIN 36  // GPIO36 (ADC1_CHANNEL_0)
+#define CURRENT_SENSOR_PIN 39  // GPIO39 (ADC1_CHANNEL_3)
+ 
+// Calibration constants
+const float VOLTAGE_CALIBRATION = 1.0;  // Adjust based on your sensors
+const float CURRENT_CALIBRATION = 1.0;  // Adjust based on your sensors
+// Sampling interval and duration
+const unsigned long SAMPLING_INTERVAL = 1000;  // 1 second
+const unsigned long UPLOAD_INTERVAL = 5184000000;  // 2 months in milliseconds (60 * 60 * 24 * 30 * 2 * 1000)
+ unsigned long previousMillis = 0;
+unsigned long lastUploadMillis = 0;
+float totalEnergyConsumed = 0.0;
+ void setup() {
+  Serial.begin(115200);
+ // Initialize OLED display
+  if (!display.begin(SSD1306_I2C_ADDRESS, OLED_RESET)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;); // Don't proceed, loop forever
+  }
+  display.display();
+  delay(2000);  // Pause for 2 seconds
+  // Clear the buffer
+  display.clearDisplay();
+  // Connect to Wi-Fi
+  WiFi.begin(ssid, password);
+  display.print("Connecting to WiFi");
+  display.display();
+ while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    display.print(".");
+    display.display();
+  }
+ display.clearDisplay();
+  display.println("WiFi connected");
+  display.println(WiFi.localIP());
+  display.display();
+ analogReadResolution(12);  // Set ADC resolution to 12 bits
+}
+void loop() {
+  unsigned long currentMillis = millis();
+ if (currentMillis - previousMillis >= SAMPLING_INTERVAL) {
+    previousMillis = currentMillis;
+    float voltage = readVoltage();
+    float current = readCurrent();
+    float power = calculatePower(voltage, current);
+    totalEnergyConsumed += (power * (SAMPLING_INTERVAL / 1000.0 / 3600.0));  // Convert power to energy in kWh
+  display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print("Voltage: ");
+    display.print(voltage);
+    display.println(" V");
+    display.print("Current: ");
+    display.print(current);
+    display.println(" A");
+    display.print("Power: ");
+    display.print(power);
+    display.println(" W");
+    display.print("Energy: ");
+    display.print(totalEnergyConsumed);
+    display.println(" kWh");
+    display.display();
+if (currentMillis - lastUploadMillis >= UPLOAD_INTERVAL) {
+    lastUploadMillis = currentMillis;
+    uploadData(totalEnergyConsumed);
+    generateAndDisplayQRCode(totalEnergyConsumed);
+    totalEnergyConsumed = 0.0;  // Reset energy consumption after upload
+  }
+}
+loat readVoltage() {
+  int sensorValue = analogRead(VOLTAGE_SENSOR_PIN);
+  float voltage = (sensorValue / 4095.0) * 3.3 * VOLTAGE_CALIBRATION;  // Assuming 3.3V reference and 12-bit ADC
+  return voltage;
+}
+ float readCurrent() {
+  int sensorValue = analogRead(CURRENT_SENSOR_PIN);
+  float current = (sensorValue / 4095.0) * 3.3 * CURRENT_CALIBRATION;  // Assuming 3.3V reference and 12-bit ADC
+  return current;
+}
+ float calculatePower(float voltage, float current) {
+  return voltage * current;  // Instantaneous power in watts
+}
+ void uploadData(float energy) {
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClient client;
+    HTTPClient http;
+   http.begin(client, serverName);
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+ String httpRequestData = "energy=" + String(energy);
+    int httpResponseCode = http.POST(httpRequestData);
+  if (httpResponseCode > 0) {
+      String response = http.getString();
+      Serial.println(httpResponseCode);
+      Serial.println(response);
+    } else {
+      Serial.print("Error on sending POST: ");
+      Serial.println(httpResponseCode);
+    }
+     http.end();
+  } else {
+    Serial.println("WiFi Disconnected");
+  }
+}
+ void generateAndDisplayQRCode(float energy) {
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.println("Generating QR...");
+  display.display();
+   // Create QR code data
+  String qrData = "http://your_payment_endpoint.com/pay?amount=" + String(energy);
+  // Initialize QR code
+  QRCode qrcode;
+  uint8_t qrcodeData[qrcode_getBufferSize(3)];
+  qrcode_initText(&qrcode, qrcodeData, 3, ECC_LOW, qrData.c_str());
+  // Display QR code on OLED
+  display.clearDisplay();
+  for (uint8_t y = 0; y < qrcode.size; y++) {
+    for (uint8_t x = 0; x < qrcode.size; x++) {
+      if (qrcode_getModule(&qrcode, x, y)) {
+        display.drawRect(x * 2, y * 2, 2, 2, SSD1306_WHITE);
+      }
+    }
+  }
+  display.display();
+}
